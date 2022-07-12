@@ -1,0 +1,128 @@
+## Titanic competition in Kaggle
+## V3 :use Neural Network.
+## They don't yield higher accuracy, though. 
+## Download data from Kaggle.
+from gc import callbacks
+from pickletools import optimize
+import pandas
+from sklearn.model_selection import train_test_split
+import numpy as np
+
+train = pandas.read_csv('titanic_train.csv')
+train.columns  
+'''
+Index(['PassengerId', 'Survived', 'Pclass', 'Name', 'Sex', 'Age', 'SibSp',
+       'Parch', 'Ticket', 'Fare', 'Cabin', 'Embarked'],
+      dtype='object')
+'''  
+X = train.drop('Survived',axis=1)
+y = (train.copy())['Survived']
+# Split the (training) data to train and test
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=4686)
+
+# missing values in X_train
+np.sum(X_train.isna(), axis=0)
+
+# Of 668, Age missing 140 Cabin 514 Embarked 2
+# Treat missing values: Age: means by groups. 
+# Embarked: mode by PClass
+
+# Cabin: correlated with Pclass?  
+Cabin_Pclass = (X_train.loc[X_train['Cabin'].notna(),:])[{'Cabin','Pclass'}]
+
+# It seems that F and G-cabins are of 2 or 3 classes. However, not definitely.
+# The Pclass variable should be able to cover Cabin.
+
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.compose import ColumnTransformer
+from sklearn.metrics import classification_report
+from sklearn.model_selection import cross_val_score, RandomizedSearchCV, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+
+Impute1 = SimpleImputer(strategy="mean", add_indicator= True)
+Impute2 = SimpleImputer(strategy="most_frequent")
+Encode = OneHotEncoder(handle_unknown="ignore")
+Scale = StandardScaler()
+
+Embarked = ['Embarked']
+Cat_attribs = ['Name','Sex','Cabin', 'Ticket']
+Age = ['Age']
+Num_attribs = ['Fare']
+
+num_pipiline1 = Pipeline(steps=[
+    ('impute1',Impute1),
+    ('scale1', StandardScaler())
+])
+
+num_pipiline2 = Pipeline(steps=[
+    ('scale1', StandardScaler())
+])
+
+cat_pipeline1 = Pipeline(steps=[
+    ('impute2', Impute2),
+    ('enco', Encode)
+])
+
+cat_pipeline2 = Pipeline(steps=[ 
+    ('encode', Encode)
+])
+
+total_pipeline = ColumnTransformer(transformers=[
+    ('num_imp', num_pipiline1, Age),
+    ('num_scale', num_pipiline2, Num_attribs),
+    ('cat_imp', cat_pipeline1, Embarked),
+    ('cat_encode', cat_pipeline2, Cat_attribs)
+], remainder="passthrough")
+
+import tensorflow as tf
+from tensorflow import keras
+from keras import layers
+
+X_train_tr = total_pipeline.fit_transform(X_train).toarray()
+
+X_test_tr = total_pipeline.transform(X_test).toarray()
+
+input_shape = X_train_tr.shape[1]
+
+tfmodel = keras.Sequential([
+      layers.BatchNormalization(input_shape=[input_shape]),
+      #layers.Dense(10, activation='relu', input_shape = [input_shape]),
+      layers.Dense(256, activation='relu', kernel_regularizer='l2'),
+      layers.Dense(128, activation='relu',kernel_regularizer='l2'),
+      layers.Dense(64, activation= 'relu', kernel_regularizer='l2'),
+      layers.Dense(16, activation='relu', kernel_regularizer='l2'),
+      layers.Dense(1,activation='sigmoid')
+])
+
+tfmodel.compile(
+      optimizer=keras.optimizers.Adam(learning_rate=0.01),
+      loss='binary_crossentropy',
+      metrics=['accuracy']
+)
+
+early_stopping = keras.callbacks.EarlyStopping(
+    patience=5,
+    min_delta=0.001,
+    restore_best_weights=True,
+)
+
+history = tfmodel.fit(
+      X_train_tr, y_train, 
+      validation_data=(X_test_tr, y_test),
+      callbacks = [early_stopping],
+      epochs=200
+)
+
+history_df = pandas.DataFrame(history.history)
+
+history_df.loc[:,['loss','val_loss']].plot(title="Cross-Entropy")
+history_df.loc[:,['accuracy','val_accuracy']].plot(title="Accuracy")
+
+pred_nn = tfmodel.predict(X_test_tr).argmax(1)
+
+print(classification_report(y_test, pred_nn))
+# Not good performance. Accuracy 0.6 and no prediction of 1.
